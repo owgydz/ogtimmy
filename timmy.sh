@@ -19,6 +19,22 @@ session_log="$log_dir/session_$boot_session.log"
 
 error_count=0
 verbose_mode=0
+pager_mode=0
+
+for arg in "$@"; do
+
+    case "$arg" in
+
+        --verbose|-v)
+            verbose_mode=1
+            ;;
+
+        --scroll|-s)
+            pager_mode=1
+            ;;
+
+    esac
+done
 
 red="\e[31m"
 green="\e[32m"
@@ -33,6 +49,15 @@ record_history() {
 }
 
 record_history "$@"
+
+page_output() {
+
+    if [ "$pager_mode" -eq 1 ]; then
+        less -R
+    else
+        cat
+    fi
+}
 
 log_system() {
 
@@ -68,7 +93,9 @@ line() {
 
 header() {
 
-    clear
+    if [ "$pager_mode" -eq 0 ]; then
+        clear
+    fi
 
     printf "${cyan}"
     printf "████████╗██╗███╗   ███╗███╗   ███╗██╗   ██╗\n"
@@ -170,22 +197,13 @@ status_cmd() {
     echo
 }
 
-verbose_cmd() {
-
-    header
-
-    verbose_mode=1
-
-    printf "${white}verbose mode enabled${reset}\n\n"
-
-    tail -f "$log_file"
-}
-
 monitor_cmd() {
 
     while true; do
 
-        clear
+        if [ "$pager_mode" -eq 0 ]; then
+            clear
+        fi
 
         cpu_usage=$(top -bn1 | awk '/Cpu/ {print 100 - $8}')
         cpu=$(printf "%.0f" "$cpu_usage")
@@ -231,27 +249,27 @@ hardware_scan() {
     printf "${white}hardware scanner${reset}\n\n"
 
     echo "[cpu]"
-    lscpu
+    lscpu | page_output
 
     echo
     echo "[memory]"
-    free -h
+    free -h | page_output
 
     echo
     echo "[storage]"
-    lsblk
+    lsblk | page_output
 
     echo
     echo "[pci]"
-    lspci
+    lspci | page_output
 
     echo
     echo "[usb]"
-    lsusb
+    lsusb | page_output
 
     echo
     echo "[audio]"
-    lspci | grep -i audio
+    lspci | grep -i audio | page_output
 
     echo
 }
@@ -332,33 +350,33 @@ benchmark_cmd() {
 }
 
 network_scan() {
-    ip addr
+    ip addr | page_output
 }
 
 network_ping() {
 
     target="$3"
 
-    ping -c 4 "$target"
+    ping -c 4 "$target" | page_output
 }
 
 network_trace() {
 
     target="$3"
 
-    traceroute "$target"
+    traceroute "$target" | page_output
 }
 
 network_ports() {
-    ss -tulpn
+    ss -tulpn | page_output
 }
 
 network_wifi_scan() {
 
     if command -v nmcli >/dev/null 2>&1; then
-        nmcli dev wifi
+        nmcli dev wifi | page_output
     else
-        iw dev wlan0 scan
+        iw dev wlan0 scan | page_output
     fi
 }
 
@@ -423,7 +441,7 @@ recovery_repair() {
 
     fsck -fy /dev/mmcblk0p1 2>/dev/null
 
-    cgpt show /dev/mmcblk0 2>/dev/null
+    cgpt show /dev/mmcblk0 2>/dev/null | page_output
 
     ok "repair sequence completed"
 }
@@ -435,7 +453,7 @@ recovery_network() {
     ip link set wlan0 up 2>/dev/null
     dhclient wlan0 2>/dev/null
 
-    ip addr
+    ip addr | page_output
 }
 
 recovery_rollback() {
@@ -499,11 +517,11 @@ chromeos_partitions() {
 
     header
 
-    cgpt show /dev/mmcblk0
+    cgpt show /dev/mmcblk0 | page_output
 
     echo
 
-    lsblk
+    lsblk | page_output
 }
 
 chromeos_firmware() {
@@ -693,13 +711,13 @@ vm_list() {
 
     printf "${white}installed vm images${reset}\n\n"
 
-    ls -lh "$image_dir"
+    ls -lh "$image_dir" | page_output
 
     echo
 }
 
 logs_cmd() {
-    tail -n 100 "$log_file"
+    tail -n 100 "$log_file" | page_output
 }
 
 logs_follow() {
@@ -707,15 +725,15 @@ logs_follow() {
 }
 
 logs_errors() {
-    grep "\[fail\]" "$log_file"
+    grep "\[fail\]" "$log_file" | page_output
 }
 
 logs_sessions() {
-    ls -1 "$log_dir"/session_*.log 2>/dev/null
+    ls -1 "$log_dir"/session_*.log 2>/dev/null | page_output
 }
 
 history_cmd() {
-    tail -n 50 "$history_file"
+    tail -n 50 "$history_file" | page_output
 }
 
 unsafe_enable() {
@@ -764,8 +782,12 @@ help_cmd() {
 
 cat << EOF
 
+flags
+
+--verbose  enable verbose logging
+--scroll   enable scrollable output
+
 status
-verbose
 monitor
 
 hardware scan
@@ -821,12 +843,15 @@ EOF
 
 case "$1" in
 
+    --verbose|-v|--scroll|-s)
+        shift
+        ;;
+esac
+
+case "$1" in
+
     status)
         status_cmd
-        ;;
-
-    verbose)
-        verbose_cmd
         ;;
 
     monitor)
