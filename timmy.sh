@@ -91,6 +91,13 @@ line() {
     printf "${blue}====================================================${reset}\n"
 }
 
+verbose_print() {
+
+    if [ "$verbose_mode" -eq 1 ]; then
+        printf "${blue}[verbose]${reset} %s\n" "$1"
+    fi
+}
+
 header() {
 
     if [ "$pager_mode" -eq 0 ]; then
@@ -281,20 +288,46 @@ benchmark_cmd() {
     printf "${white}advanced benchmark suite${reset}\n\n"
 
     cpu_model=$(grep "model name" /proc/cpuinfo | head -1 | cut -d: -f2 | sed 's/^ //')
+    cpu_cores=$(nproc)
+    total_mem=$(free -h | awk '/Mem:/ {print $2}')
+    disk_model=$(lsblk -d -o NAME,SIZE | tail -n +2)
 
     printf " cpu model     : %s\n" "$cpu_model"
-    printf " cpu cores     : %s\n" "$(nproc)"
+    printf " cpu cores     : %s\n" "$cpu_cores"
+    printf " memory total  : %s\n" "$total_mem"
+
+    echo
+    verbose_print "detected disk devices:"
+    verbose_print "$disk_model"
 
     echo
 
     loading "running cpu benchmark"
+
+    verbose_print "launching sha256 workload"
+    verbose_print "sampling cpu load for 8 seconds"
 
     cpu_start=$(date +%s%N)
 
     sha256sum /dev/zero >/dev/null &
     cpu_pid=$!
 
-    sleep 8
+    for i in {1..8}; do
+
+        if [ "$verbose_mode" -eq 1 ]; then
+
+            cpu_live=$(top -bn1 | awk '/Cpu/ {print 100 - $8}')
+            cpu_temp=0
+
+            if [ -f /sys/class/thermal/thermal_zone0/temp ]; then
+                cpu_temp=$(( $(cat /sys/class/thermal/thermal_zone0/temp) / 1000 ))
+            fi
+
+            printf "${blue}[verbose]${reset} cpu load %.1f%% | temp %sc\n" "$cpu_live" "$cpu_temp"
+        fi
+
+        sleep 1
+    done
 
     kill "$cpu_pid" 2>/dev/null
 
@@ -308,15 +341,20 @@ benchmark_cmd() {
 
     loading "running memory benchmark"
 
+    verbose_print "writing 2gb memory stress file"
+    verbose_print "target file: /tmp/timmy_memtest"
+
     mem_start=$(date +%s%N)
 
-    dd if=/dev/zero of=/tmp/timmy_memtest bs=1M count=2048 status=none
+    dd if=/dev/zero of=/tmp/timmy_memtest bs=1M count=2048 status=progress
 
     sync
 
     mem_end=$(date +%s%N)
 
     mem_runtime=$(( (mem_end - mem_start) / 1000000 ))
+
+    mem_speed=$((2048 * 1000 / (mem_runtime / 1000 + 1)))
 
     rm -f /tmp/timmy_memtest
 
@@ -326,13 +364,19 @@ benchmark_cmd() {
 
     loading "running disk benchmark"
 
+    verbose_print "performing sequential write test"
+    verbose_print "block size: 8m"
+    verbose_print "block count: 256"
+
     disk_start=$(date +%s%N)
 
-    dd if=/dev/zero of=/tmp/timmy_disk_test bs=8M count=256 conv=fdatasync status=none
+    dd if=/dev/zero of=/tmp/timmy_disk_test bs=8M count=256 conv=fdatasync status=progress
 
     disk_end=$(date +%s%N)
 
     disk_runtime=$(( (disk_end - disk_start) / 1000000 ))
+
+    disk_speed=$((2048 * 1000 / (disk_runtime / 1000 + 1)))
 
     rm -f /tmp/timmy_disk_test
 
@@ -347,6 +391,26 @@ benchmark_cmd() {
     printf " disk runtime   : %sms\n" "$disk_runtime"
 
     echo
+
+    printf " estimated memory throughput : %s mb/s\n" "$mem_speed"
+    printf " estimated disk throughput   : %s mb/s\n" "$disk_speed"
+
+    echo
+
+    if [ "$verbose_mode" -eq 1 ]; then
+
+        verbose_print "benchmark metadata"
+
+        uname -a | while read -r line; do
+            verbose_print "$line"
+        done
+
+        verbose_print "filesystem usage"
+
+        df -h | while read -r line; do
+            verbose_print "$line"
+        done
+    fi
 }
 
 network_scan() {
