@@ -59,6 +59,13 @@ page_output() {
     fi
 }
 
+verbose_print() {
+
+    if [ "$verbose_mode" -eq 1 ]; then
+        printf "${blue}[verbose]${reset} %s\n" "$1"
+    fi
+}
+
 log_system() {
 
     subsystem="$1"
@@ -89,13 +96,6 @@ log_error() {
 
 line() {
     printf "${blue}====================================================${reset}\n"
-}
-
-verbose_print() {
-
-    if [ "$verbose_mode" -eq 1 ]; then
-        printf "${blue}[verbose]${reset} %s\n" "$1"
-    fi
 }
 
 header() {
@@ -191,17 +191,51 @@ status_cmd() {
 
     printf "${white}system status${reset}\n\n"
 
-    printf " hostname      : %s\n" "$(hostname)"
-    printf " kernel        : %s\n" "$(uname -r)"
-    printf " architecture  : %s\n" "$(uname -m)"
-    printf " uptime        : %s\n" "$(uptime -p)"
-    printf " memory        : %s\n" "$(free -h | awk '/Mem:/ {print $3 " / " $2}')"
+    hostname_value=$(hostname)
+    kernel_value=$(uname -r)
+    arch_value=$(uname -m)
+    uptime_value=$(uptime -p)
+    memory_value=$(free -h | awk '/Mem:/ {print $3 " / " $2}')
+
+    printf " hostname      : %s\n" "$hostname_value"
+    printf " kernel        : %s\n" "$kernel_value"
+    printf " architecture  : %s\n" "$arch_value"
+    printf " uptime        : %s\n" "$uptime_value"
+    printf " memory        : %s\n" "$memory_value"
 
     if [ -d /sys/class/power_supply/BAT0 ]; then
-        printf " battery       : %s%%\n" "$(cat /sys/class/power_supply/BAT0/capacity)"
+        battery_value=$(cat /sys/class/power_supply/BAT0/capacity)
+        printf " battery       : %s%%\n" "$battery_value"
     fi
 
     echo
+
+    if [ "$verbose_mode" -eq 1 ]; then
+
+        verbose_print "detailed system information"
+
+        verbose_print "hostname: $hostname_value"
+        verbose_print "kernel: $kernel_value"
+        verbose_print "architecture: $arch_value"
+
+        verbose_print "cpu info"
+
+        lscpu | while read -r line; do
+            verbose_print "$line"
+        done
+
+        verbose_print "memory info"
+
+        free -h | while read -r line; do
+            verbose_print "$line"
+        done
+
+        verbose_print "mounted filesystems"
+
+        mount | while read -r line; do
+            verbose_print "$line"
+        done
+    fi
 }
 
 monitor_cmd() {
@@ -245,6 +279,13 @@ monitor_cmd() {
         echo
         printf " errors logged : %s\n" "$error_count"
 
+        if [ "$verbose_mode" -eq 1 ]; then
+            verbose_print "live cpu usage : ${cpu}%"
+            verbose_print "live ram usage : ${ram_percent}%"
+            verbose_print "live disk usage: ${disk_percent}%"
+            verbose_print "live temp      : ${temp}c"
+        fi
+
         sleep 2
     done
 }
@@ -279,6 +320,15 @@ hardware_scan() {
     lspci | grep -i audio | page_output
 
     echo
+
+    if [ "$verbose_mode" -eq 1 ]; then
+
+        verbose_print "dmi information"
+
+        dmidecode 2>/dev/null | while read -r line; do
+            verbose_print "$line"
+        done
+    fi
 }
 
 benchmark_cmd() {
@@ -297,15 +347,11 @@ benchmark_cmd() {
     printf " memory total  : %s\n" "$total_mem"
 
     echo
+
     verbose_print "detected disk devices:"
     verbose_print "$disk_model"
 
-    echo
-
     loading "running cpu benchmark"
-
-    verbose_print "launching sha256 workload"
-    verbose_print "sampling cpu load for 8 seconds"
 
     cpu_start=$(date +%s%N)
 
@@ -323,7 +369,7 @@ benchmark_cmd() {
                 cpu_temp=$(( $(cat /sys/class/thermal/thermal_zone0/temp) / 1000 ))
             fi
 
-            printf "${blue}[verbose]${reset} cpu load %.1f%% | temp %sc\n" "$cpu_live" "$cpu_temp"
+            verbose_print "cpu load ${cpu_live}% | temp ${cpu_temp}c"
         fi
 
         sleep 1
@@ -332,17 +378,11 @@ benchmark_cmd() {
     kill "$cpu_pid" 2>/dev/null
 
     cpu_end=$(date +%s%N)
-
     cpu_runtime=$(( (cpu_end - cpu_start) / 1000000 ))
 
     ok "cpu benchmark completed"
 
-    echo
-
     loading "running memory benchmark"
-
-    verbose_print "writing 2gb memory stress file"
-    verbose_print "target file: /tmp/timmy_memtest"
 
     mem_start=$(date +%s%N)
 
@@ -353,20 +393,13 @@ benchmark_cmd() {
     mem_end=$(date +%s%N)
 
     mem_runtime=$(( (mem_end - mem_start) / 1000000 ))
-
     mem_speed=$((2048 * 1000 / (mem_runtime / 1000 + 1)))
 
     rm -f /tmp/timmy_memtest
 
     ok "memory benchmark completed"
 
-    echo
-
     loading "running disk benchmark"
-
-    verbose_print "performing sequential write test"
-    verbose_print "block size: 8m"
-    verbose_print "block count: 256"
 
     disk_start=$(date +%s%N)
 
@@ -375,7 +408,6 @@ benchmark_cmd() {
     disk_end=$(date +%s%N)
 
     disk_runtime=$(( (disk_end - disk_start) / 1000000 ))
-
     disk_speed=$((2048 * 1000 / (disk_runtime / 1000 + 1)))
 
     rm -f /tmp/timmy_disk_test
@@ -396,46 +428,77 @@ benchmark_cmd() {
     printf " estimated disk throughput   : %s mb/s\n" "$disk_speed"
 
     echo
-
-    if [ "$verbose_mode" -eq 1 ]; then
-
-        verbose_print "benchmark metadata"
-
-        uname -a | while read -r line; do
-            verbose_print "$line"
-        done
-
-        verbose_print "filesystem usage"
-
-        df -h | while read -r line; do
-            verbose_print "$line"
-        done
-    fi
 }
 
 network_scan() {
+
+    header
+
     ip addr | page_output
+
+    if [ "$verbose_mode" -eq 1 ]; then
+
+        verbose_print "routing table"
+
+        ip route | while read -r line; do
+            verbose_print "$line"
+        done
+
+        verbose_print "dns configuration"
+
+        cat /etc/resolv.conf 2>/dev/null | while read -r line; do
+            verbose_print "$line"
+        done
+    fi
 }
 
 network_ping() {
 
     target="$3"
 
+    header
+
+    verbose_print "target host: $target"
+
     ping -c 4 "$target" | page_output
+
+    if [ "$verbose_mode" -eq 1 ]; then
+
+        verbose_print "dns lookup"
+
+        getent hosts "$target" | while read -r line; do
+            verbose_print "$line"
+        done
+    fi
 }
 
 network_trace() {
 
     target="$3"
 
+    header
+
+    verbose_print "trace target: $target"
+
     traceroute "$target" | page_output
 }
 
 network_ports() {
+
+    header
+
     ss -tulpn | page_output
+
+    if [ "$verbose_mode" -eq 1 ]; then
+        verbose_print "active listening services displayed"
+    fi
 }
 
 network_wifi_scan() {
+
+    header
+
+    verbose_print "scanning nearby wifi networks"
 
     if command -v nmcli >/dev/null 2>&1; then
         nmcli dev wifi | page_output
@@ -448,12 +511,24 @@ network_speedtest() {
 
     loading "running speed test"
 
+    verbose_print "target host: speed.hetzner.de"
+
+    start=$(date +%s)
+
     curl -L -o /dev/null https://speed.hetzner.de/100MB.bin
+
+    end=$(date +%s)
+
+    runtime=$((end - start))
+
+    printf "\n download completed in %ss\n\n" "$runtime"
 }
 
 network_sniff() {
 
     unsafe_check
+
+    verbose_print "capturing packets on all interfaces"
 
     tcpdump -i any
 }
@@ -472,6 +547,9 @@ thermal_cmd() {
 
             printf " %-15s : %sc\n" "$name" "$celsius"
 
+            if [ "$verbose_mode" -eq 1 ]; then
+                verbose_print "raw thermal value for $name : ${temp}mc"
+            fi
         fi
     done
 
@@ -482,10 +560,29 @@ battery_health() {
 
     header
 
-    printf " capacity : %s%%\n" "$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null)"
-    printf " status   : %s\n" "$(cat /sys/class/power_supply/BAT0/status 2>/dev/null)"
+    capacity=$(cat /sys/class/power_supply/BAT0/capacity 2>/dev/null)
+    status=$(cat /sys/class/power_supply/BAT0/status 2>/dev/null)
+
+    printf " capacity : %s%%\n" "$capacity"
+    printf " status   : %s\n" "$status"
 
     echo
+
+    if [ "$verbose_mode" -eq 1 ]; then
+
+        verbose_print "battery telemetry"
+
+        for file in /sys/class/power_supply/BAT0/*; do
+
+            if [ -f "$file" ]; then
+
+                name=$(basename "$file")
+                value=$(cat "$file" 2>/dev/null)
+
+                verbose_print "$name : $value"
+            fi
+        done
+    fi
 }
 
 recovery_shell() {
@@ -501,11 +598,24 @@ recovery_repair() {
 
     require_root
 
+    header
+
     loading "checking filesystems"
+
+    verbose_print "target disk: /dev/mmcblk0"
 
     fsck -fy /dev/mmcblk0p1 2>/dev/null
 
-    cgpt show /dev/mmcblk0 2>/dev/null | page_output
+    cgpt show /dev/mmcblk0 | page_output
+
+    if [ "$verbose_mode" -eq 1 ]; then
+
+        verbose_print "block device information"
+
+        lsblk -f | while read -r line; do
+            verbose_print "$line"
+        done
+    fi
 
     ok "repair sequence completed"
 }
@@ -530,6 +640,8 @@ recovery_rollback() {
         err "no firmware backups found"
         exit 1
     fi
+
+    verbose_print "restoring firmware image $latest"
 
     flashrom -p internal -w "$latest"
 
@@ -560,21 +672,38 @@ chromeos_verify() {
 
     if command -v crossystem >/dev/null 2>&1; then
 
-        echo " developer mode : $(crossystem devsw_boot)"
-        echo " active slot    : $(crossystem mainfw_act)"
-        echo " firmware id    : $(crossystem fwid)"
-        echo " recovery reason: $(crossystem recovery_reason)"
-        echo " tpm initialized: $(crossystem tpm_init_done)"
-        echo " wp switch      : $(crossystem wpsw_cur)"
-        echo " rw legacy      : $(crossystem dev_boot_legacy)"
+        devmode=$(crossystem devsw_boot)
+        slot=$(crossystem mainfw_act)
+        firmware=$(crossystem fwid)
+        recovery=$(crossystem recovery_reason)
+        tpm=$(crossystem tpm_init_done)
+        wp=$(crossystem wpsw_cur)
+        legacy=$(crossystem dev_boot_legacy)
+
+        echo " developer mode : $devmode"
+        echo " active slot    : $slot"
+        echo " firmware id    : $firmware"
+        echo " recovery reason: $recovery"
+        echo " tpm initialized: $tpm"
+        echo " wp switch      : $wp"
+        echo " rw legacy      : $legacy"
+
+        echo
+
+        if [ "$verbose_mode" -eq 1 ]; then
+
+            verbose_print "full crossystem dump"
+
+            crossystem | while read -r line; do
+                verbose_print "$line"
+            done
+        fi
 
     else
 
         err "crossystem unavailable"
 
     fi
-
-    echo
 }
 
 chromeos_partitions() {
@@ -592,11 +721,24 @@ chromeos_firmware() {
 
     header
 
-    printf " bios vendor : %s\n" "$(cat /sys/class/dmi/id/bios_vendor 2>/dev/null)"
-    printf " bios version: %s\n" "$(cat /sys/class/dmi/id/bios_version 2>/dev/null)"
-    printf " bios date   : %s\n" "$(cat /sys/class/dmi/id/bios_date 2>/dev/null)"
+    vendor=$(cat /sys/class/dmi/id/bios_vendor 2>/dev/null)
+    version_info=$(cat /sys/class/dmi/id/bios_version 2>/dev/null)
+    bios_date=$(cat /sys/class/dmi/id/bios_date 2>/dev/null)
+
+    printf " bios vendor : %s\n" "$vendor"
+    printf " bios version: %s\n" "$version_info"
+    printf " bios date   : %s\n" "$bios_date"
 
     echo
+
+    if [ "$verbose_mode" -eq 1 ]; then
+
+        verbose_print "firmware metadata"
+
+        dmidecode -t bios 2>/dev/null | while read -r line; do
+            verbose_print "$line"
+        done
+    fi
 }
 
 find_vm_image() {
@@ -654,6 +796,11 @@ find_vm_image() {
 
     loading "downloading image"
 
+    if [ "$verbose_mode" -eq 1 ]; then
+        verbose_print "download url: $remote_url"
+        verbose_print "cache path  : $local_file"
+    fi
+
     if command -v curl >/dev/null 2>&1; then
 
         curl -L "$remote_url" -o "$local_file"
@@ -665,12 +812,6 @@ find_vm_image() {
     else
 
         err "no downloader available"
-        exit 1
-
-    fi
-
-    if [ ! -f "$local_file" ]; then
-        err "download failed"
         exit 1
     fi
 
@@ -705,13 +846,7 @@ vm_start() {
 
     requested="$3"
 
-    if [ -z "$requested" ]; then
-        err "missing vm image"
-        exit 1
-    fi
-
     image=$(find_vm_image "$requested")
-
     backend=$(vm_backend_detect)
 
     header
@@ -721,11 +856,17 @@ vm_start() {
     printf " backend : %s\n" "$backend"
     printf " image   : %s\n\n" "$image"
 
+    if [ "$verbose_mode" -eq 1 ]; then
+
+        verbose_print "vm backend selected: $backend"
+        verbose_print "vm image path: $image"
+        verbose_print "allocated memory: 2048mb"
+        verbose_print "allocated cpus: 2"
+    fi
+
     case "$backend" in
 
         crosvm)
-
-            loading "starting crosvm"
 
             crosvm run \
                 --mem 2048 \
@@ -735,16 +876,12 @@ vm_start() {
 
         kvm)
 
-            loading "starting kvm"
-
             kvm \
                 -m 2048 \
                 -cdrom "$image"
             ;;
 
         qemu)
-
-            loading "starting qemu"
 
             qemu-system-x86_64 \
                 -m 2048 \
@@ -753,16 +890,9 @@ vm_start() {
                 -cdrom "$image"
             ;;
 
-        none)
+        *)
 
             err "no vm backend detected"
-
-            echo
-            printf "${yellow}supported backends:${reset}\n\n"
-            printf " crosvm\n"
-            printf " kvm\n"
-            printf " qemu\n\n"
-
             exit 1
             ;;
 
