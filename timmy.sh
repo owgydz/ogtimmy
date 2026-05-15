@@ -942,6 +942,397 @@ vm_start() {
             err "no vm backend detected"
             exit 1
             ;;
-
     esac
+}
+vm_list() {
+
+    header
+
+    printf "${white}installed vm images${reset}\n\n"
+
+    ls -lh "$image_dir" | page_output
+
+    echo
+}
+
+logs_cmd() {
+
+    header
+
+    tail -n 100 "$log_file" | page_output
+}
+
+logs_follow() {
+
+    header
+
+    tail -f "$log_file"
+}
+
+logs_errors() {
+
+    header
+
+    grep "\[fail\]" "$log_file" | page_output
+}
+
+history_cmd() {
+
+    header
+
+    tail -n 50 "$history_file" | page_output
+}
+
+unsafe_enable() {
+
+    require_root
+
+    echo "unsafe=enabled" > "$config_dir/unsafe.conf"
+
+    ok "unsafe mode enabled"
+}
+
+unsafe_disable() {
+
+    require_root
+
+    rm -f "$config_dir/unsafe.conf"
+
+    ok "unsafe mode disabled"
+}
+
+unsafe_status() {
+
+    if [ -f "$config_dir/unsafe.conf" ]; then
+        printf "${red}unsafe mode enabled${reset}\n"
+    else
+        printf "${green}unsafe mode disabled${reset}\n"
+    fi
+}
+
+firmware_backup() {
+
+    require_root
+
+    backup_file="$backup_dir/firmware_$(date +%Y%m%d_%H%M%S).bin"
+
+    flashrom -p internal -r "$backup_file"
+
+    ok "firmware backup completed"
+
+    echo "$backup_file"
+}
+
+help_cmd() {
+
+    header
+
+cat << EOF
+
+flags
+
+--verbose  enable verbose logging
+--scroll   enable scrollable output
+
+status
+monitor
+benchmark
+
+hardware scan
+
+network scan
+network ping <host>
+network trace <host>
+network ports
+network wifi scan
+network speedtest
+network sniff
+
+thermal
+battery health
+
+chromeos status
+chromeos verify
+chromeos firmware
+chromeos partitions
+
+recovery shell
+recovery repair
+recovery network
+recovery rollback
+
+vm start alpine
+vm start debian
+vm start tinycore
+vm start arch
+vm start fedora
+
+vm list
+
+logs
+logs follow
+logs errors
+
+history
+
+unsafe enable
+unsafe disable
+unsafe status
+
+firmware backup
+
+help
+
+EOF
+}
+
+case "$1" in
+
+    --verbose|-v|--scroll|-s)
+        shift
+        ;;
+esac
+
+case "$1" in
+
+    status)
+        status_cmd
+        ;;
+
+    monitor)
+        monitor_cmd
+        ;;
+
+    benchmark)
+        benchmark_cmd
+        ;;
+
+    hardware)
+
+        case "$2" in
+
+            scan)
+                hardware_scan
+                ;;
+
+            *)
+                err "invalid hardware command"
+                ;;
+
+        esac
+        ;;
+
+    network)
+
+        case "$2" in
+
+            scan)
+                network_scan
+                ;;
+
+            ping)
+                network_ping "$@"
+                ;;
+
+            trace)
+                network_trace "$@"
+                ;;
+
+            ports)
+                network_ports
+                ;;
+
+            speedtest)
+                network_speedtest
+                ;;
+
+            sniff)
+                network_sniff
+                ;;
+
+            wifi)
+
+                case "$3" in
+
+                    scan)
+                        network_wifi_scan
+                        ;;
+
+                    *)
+                        err "invalid wifi command"
+                        ;;
+
+                esac
+                ;;
+
+            *)
+                err "invalid network command"
+                ;;
+
+        esac
+        ;;
+
+    thermal)
+        thermal_cmd
+        ;;
+
+    battery)
+
+        case "$2" in
+
+            health)
+                battery_health
+                ;;
+
+            *)
+                err "invalid battery command"
+                ;;
+
+        esac
+        ;;
+
+    recovery)
+
+        case "$2" in
+
+            shell)
+                recovery_shell
+                ;;
+
+            repair)
+                recovery_repair
+                ;;
+
+            network)
+                recovery_network
+                ;;
+
+            rollback)
+                recovery_rollback
+                ;;
+
+            *)
+                err "invalid recovery command"
+                ;;
+
+        esac
+        ;;
+
+    chromeos)
+
+        case "$2" in
+
+            status)
+                chromeos_status
+                ;;
+
+            verify)
+                chromeos_verify
+                ;;
+
+            firmware)
+                chromeos_firmware
+                ;;
+
+            partitions)
+                chromeos_partitions
+                ;;
+
+            *)
+                err "invalid chromeos command"
+                ;;
+
+        esac
+        ;;
+
+    vm)
+
+        case "$2" in
+
+            start)
+                vm_start "$@"
+                ;;
+
+            list)
+                vm_list
+                ;;
+
+            *)
+                err "invalid vm command"
+                ;;
+
+        esac
+        ;;
+
+    logs)
+
+        case "$2" in
+
+            follow)
+                logs_follow
+                ;;
+
+            errors)
+                logs_errors
+                ;;
+
+            *)
+                logs_cmd
+                ;;
+
+        esac
+        ;;
+
+    history)
+        history_cmd
+        ;;
+
+    unsafe)
+
+        case "$2" in
+
+            enable)
+                unsafe_enable
+                ;;
+
+            disable)
+                unsafe_disable
+                ;;
+
+            status)
+                unsafe_status
+                ;;
+
+            *)
+                err "invalid unsafe command"
+                ;;
+
+        esac
+        ;;
+
+    firmware)
+
+        case "$2" in
+
+            backup)
+                firmware_backup
+                ;;
+
+            *)
+                err "invalid firmware command"
+                ;;
+
+        esac
+        ;;
+
+    help|"")
+        help_cmd
+        ;;
+
+    *)
+        err "unknown command"
+        help_cmd
+        ;;
+
+esac
 }
