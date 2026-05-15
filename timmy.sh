@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="2.9.6-rc2"
+version="2.9.6-rc3"
 
 config_dir="/etc/timmy"
 log_dir="/var/log/timmy"
@@ -1010,80 +1010,171 @@ unsafe_status() {
     fi
 }
 
+firmware_info() {
+
+    header
+
+    printf "${white}firmware information${reset}\n\n"
+
+    printf " bios vendor   : %s\n" "$(cat /sys/class/dmi/id/bios_vendor 2>/dev/null)"
+    printf " bios version  : %s\n" "$(cat /sys/class/dmi/id/bios_version 2>/dev/null)"
+    printf " bios date     : %s\n" "$(cat /sys/class/dmi/id/bios_date 2>/dev/null)"
+    printf " board vendor  : %s\n" "$(cat /sys/class/dmi/id/board_vendor 2>/dev/null)"
+    printf " board name    : %s\n" "$(cat /sys/class/dmi/id/board_name 2>/dev/null)"
+
+    echo
+
+    if [ "$verbose_mode" -eq 1 ]; then
+
+        verbose_print "full bios metadata"
+
+        dmidecode -t bios 2>/dev/null | while read -r line; do
+            verbose_print "$line"
+        done
+    fi
+}
+
 firmware_backup() {
 
     require_root
 
+    header
+
     backup_file="$backup_dir/firmware_$(date +%Y%m%d_%H%M%S).bin"
+
+    loading "creating firmware backup"
+
+    verbose_print "backup destination: $backup_file"
 
     flashrom -p internal -r "$backup_file"
 
+    if [ ! -f "$backup_file" ]; then
+        err "firmware backup failed"
+        exit 1
+    fi
+
+    backup_size=$(du -h "$backup_file" | awk '{print $1}')
+
     ok "firmware backup completed"
 
-    echo "$backup_file"
+    printf "\n backup file : %s\n" "$backup_file"
+    printf " backup size : %s\n\n" "$backup_size"
+}
+
+firmware_list() {
+
+    header
+
+    printf "${white}firmware backups${reset}\n\n"
+
+    ls -lh "$backup_dir" | page_output
+}
+
+firmware_restore() {
+
+    require_root
+
+    image="$3"
+
+    if [ -z "$image" ]; then
+        err "missing firmware image"
+        exit 1
+    fi
+
+    if [ ! -f "$image" ]; then
+        err "firmware image not found"
+        exit 1
+    fi
+
+    header
+
+    printf "${red}warning${reset}\n\n"
+    printf " restoring firmware can brick the device\n\n"
+
+    printf " target image : %s\n\n" "$image"
+
+    printf "continue? [y/N]: "
+    read confirm
+
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+        err "restore aborted"
+        exit 1
+    fi
+
+    loading "restoring firmware"
+
+    verbose_print "writing firmware image"
+
+    flashrom -p internal -w "$image"
+
+    ok "firmware restore completed"
+}
+
+firmware_verify() {
+
+    require_root
+
+    header
+
+    temp_dump="/tmp/timmy_verify.bin"
+
+    loading "reading firmware"
+
+    flashrom -p internal -r "$temp_dump"
+
+    checksum=$(sha256sum "$temp_dump" | awk '{print $1}')
+
+    printf "\n sha256 : %s\n\n" "$checksum"
+
+    rm -f "$temp_dump"
+
+    ok "verification completed"
 }
 
 help_cmd() {
 
     header
 
-cat << EOF
+    printf "${white}timmy commands:${reset}\n\n"
 
-flags
+    printf "┌────────────────────┬────────────────────┬────────────────────┬────────────────────┬────────────────────┐\n"
+    printf "│ status             │ monitor            │ benchmark          │ history            │ logs               │\n"
+    printf "├────────────────────┼────────────────────┼────────────────────┼────────────────────┼────────────────────┤\n"
+    printf "│ hardware scan      │ thermal            │ battery health     │ logs follow        │ logs errors        │\n"
+    printf "├────────────────────┼────────────────────┼────────────────────┼────────────────────┼────────────────────┤\n"
+    printf "│ network scan       │ network ping       │ network trace      │ network ports      │ network wifi scan  │\n"
+    printf "├────────────────────┼────────────────────┼────────────────────┼────────────────────┼────────────────────┤\n"
+    printf "│ vm start alpine    │ vm start debian   │ vm start arch      │ vm start fedora    │ vm list            │\n"
+    printf "├────────────────────┼────────────────────┼────────────────────┼────────────────────┼────────────────────┤\n"
+    printf "│ firmware info      │ firmware backup    │ firmware restore   │ firmware verify    │ firmware list      │\n"
+    printf "└────────────────────┴────────────────────┴────────────────────┴────────────────────┴────────────────────┘\n"
 
---verbose  enable verbose logging
---scroll   enable scrollable output
+    echo
 
-status
-monitor
-benchmark
+    printf "${white}advanced commands${reset}\n\n"
 
-hardware scan
+    printf " chromeos status\n"
+    printf " chromeos verify\n"
+    printf " chromeos firmware\n"
+    printf " chromeos partitions\n"
+    printf " recovery shell\n"
+    printf " recovery repair\n"
+    printf " recovery network\n"
+    printf " recovery rollback\n"
+    printf " network speedtest\n"
+    printf " network sniff\n"
+    printf " unsafe enable\n"
+    printf " unsafe disable\n"
+    printf " unsafe status\n"
 
-network scan
-network ping <host>
-network trace <host>
-network ports
-network wifi scan
-network speedtest
-network sniff
+    echo
 
-thermal
-battery health
+    printf "${white}flags${reset}\n\n"
 
-chromeos status
-chromeos verify
-chromeos firmware
-chromeos partitions
+    printf " --verbose   enable verbose engineering diagnostics\n"
+    printf " --scroll    enable interactive scrolling mode\n"
 
-recovery shell
-recovery repair
-recovery network
-recovery rollback
-
-vm start alpine
-vm start debian
-vm start tinycore
-vm start arch
-vm start fedora
-
-vm list
-
-logs
-logs follow
-logs errors
-
-history
-
-unsafe enable
-unsafe disable
-unsafe status
-
-firmware backup
-
-help
-
-EOF
+    echo
 }
 
 case "$1" in
@@ -1118,7 +1209,6 @@ case "$1" in
             *)
                 err "invalid hardware command"
                 ;;
-
         esac
         ;;
 
@@ -1142,14 +1232,6 @@ case "$1" in
                 network_ports
                 ;;
 
-            speedtest)
-                network_speedtest
-                ;;
-
-            sniff)
-                network_sniff
-                ;;
-
             wifi)
 
                 case "$3" in
@@ -1161,14 +1243,20 @@ case "$1" in
                     *)
                         err "invalid wifi command"
                         ;;
-
                 esac
+                ;;
+
+            speedtest)
+                network_speedtest
+                ;;
+
+            sniff)
+                network_sniff
                 ;;
 
             *)
                 err "invalid network command"
                 ;;
-
         esac
         ;;
 
@@ -1187,7 +1275,6 @@ case "$1" in
             *)
                 err "invalid battery command"
                 ;;
-
         esac
         ;;
 
@@ -1214,7 +1301,6 @@ case "$1" in
             *)
                 err "invalid recovery command"
                 ;;
-
         esac
         ;;
 
@@ -1241,7 +1327,6 @@ case "$1" in
             *)
                 err "invalid chromeos command"
                 ;;
-
         esac
         ;;
 
@@ -1260,7 +1345,6 @@ case "$1" in
             *)
                 err "invalid vm command"
                 ;;
-
         esac
         ;;
 
@@ -1279,7 +1363,6 @@ case "$1" in
             *)
                 logs_cmd
                 ;;
-
         esac
         ;;
 
@@ -1306,7 +1389,6 @@ case "$1" in
             *)
                 err "invalid unsafe command"
                 ;;
-
         esac
         ;;
 
@@ -1314,14 +1396,29 @@ case "$1" in
 
         case "$2" in
 
+            info)
+                firmware_info
+                ;;
+
             backup)
                 firmware_backup
+                ;;
+
+            list)
+                firmware_list
+                ;;
+
+            restore)
+                firmware_restore "$@"
+                ;;
+
+            verify)
+                firmware_verify
                 ;;
 
             *)
                 err "invalid firmware command"
                 ;;
-
         esac
         ;;
 
@@ -1333,5 +1430,4 @@ case "$1" in
         err "unknown command"
         help_cmd
         ;;
-
 esac
