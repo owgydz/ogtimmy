@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="2.9.5"
+version="2.9.6"
 
 config_dir="/etc/timmy"
 log_dir="/var/log/timmy"
@@ -53,7 +53,15 @@ record_history "$@"
 page_output() {
 
     if [ "$pager_mode" -eq 1 ]; then
-        less -R
+
+        less \
+            -R \
+            -M \
+            -i \
+            -J \
+            -+F \
+            -X
+
     else
         cat
     fi
@@ -73,11 +81,15 @@ log_system() {
 
     timestamp=$(date '+%Y-%m-%d %H:%M:%S')
 
-    echo "[$timestamp][$subsystem] $message" >> "$log_file"
-    echo "[$timestamp][$subsystem] $message" >> "$session_log"
+    log_entry="[$timestamp][$subsystem] $message"
+
+    echo "$log_entry" >> "$log_file"
+    echo "$log_entry" >> "$session_log"
+
+    printf "${cyan}[log]${reset} %s\n" "$log_entry"
 
     if [ "$verbose_mode" -eq 1 ]; then
-        printf "${blue}[verbose]${reset} [%s][%s] %s\n" "$timestamp" "$subsystem" "$message"
+        printf "${blue}[verbose-log]${reset} %s\n" "$log_entry"
     fi
 }
 
@@ -161,6 +173,69 @@ unsafe_check() {
 
     if [ ! -f "$config_dir/unsafe.conf" ]; then
         err "unsafe mode disabled"
+        exit 1
+    fi
+}
+
+fetch_cleanup() {
+
+    required_mb="$1"
+
+    available_mb=$(df -Pm "$image_dir" | awk 'NR==2 {print $4}')
+
+    verbose_print "required space: ${required_mb}mb"
+    verbose_print "available space: ${available_mb}mb"
+
+    if [ "$available_mb" -ge "$required_mb" ]; then
+        return
+    fi
+
+    warn "insufficient storage space detected"
+
+    echo
+    printf "${yellow}cached images marked for deletion:${reset}\n\n"
+
+    total_reclaim=0
+
+    while read -r file; do
+
+        [ -f "$file" ] || continue
+
+        size_mb=$(du -m "$file" | awk '{print $1}')
+        total_reclaim=$((total_reclaim + size_mb))
+
+        printf " %-8s %s\n" "${size_mb}mb" "$file"
+
+    done < <(find "$image_dir" -type f)
+
+    echo
+    printf " reclaimable space : %smb\n\n" "$total_reclaim"
+
+    printf "${yellow}delete cached images to continue? [y/N]: ${reset}"
+    read confirm
+
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+        err "download aborted"
+        exit 1
+    fi
+
+    verbose_print "deleting cached images"
+
+    find "$image_dir" -type f | while read -r file; do
+
+        verbose_print "deleting $file"
+
+        rm -f "$file"
+    done
+
+    ok "cached images deleted"
+
+    available_mb=$(df -Pm "$image_dir" | awk 'NR==2 {print $4}')
+
+    verbose_print "remaining free space: ${available_mb}mb"
+
+    if [ "$available_mb" -lt "$required_mb" ]; then
+        err "still insufficient storage space"
         exit 1
     fi
 }
@@ -418,14 +493,7 @@ benchmark_cmd() {
 
     printf "${cyan}benchmark results${reset}\n\n"
 
-    printf " cpu runtime    : %sms\n" "$cpu_runtime"
-    printf " memory runtime : %sms\n" "$mem_runtime"
-    printf " disk runtime   : %sms\n" "$disk_runtime"
-
-    echo
-
-    printf " estimated memory throughput : %s mb/s\n" "$mem_speed"
-    printf " estimated disk throughput   : %s mb/s\n" "$disk_speed"
+    printf " cpu runtime : %sms\n" "$cpu_runtime"
 
     echo
 }
@@ -435,21 +503,6 @@ network_scan() {
     header
 
     ip addr | page_output
-
-    if [ "$verbose_mode" -eq 1 ]; then
-
-        verbose_print "routing table"
-
-        ip route | while read -r line; do
-            verbose_print "$line"
-        done
-
-        verbose_print "dns configuration"
-
-        cat /etc/resolv.conf 2>/dev/null | while read -r line; do
-            verbose_print "$line"
-        done
-    fi
 }
 
 network_ping() {
@@ -672,37 +725,16 @@ chromeos_verify() {
 
     if command -v crossystem >/dev/null 2>&1; then
 
-        devmode=$(crossystem devsw_boot)
-        slot=$(crossystem mainfw_act)
-        firmware=$(crossystem fwid)
-        recovery=$(crossystem recovery_reason)
-        tpm=$(crossystem tpm_init_done)
-        wp=$(crossystem wpsw_cur)
-        legacy=$(crossystem dev_boot_legacy)
-
-        echo " developer mode : $devmode"
-        echo " active slot    : $slot"
-        echo " firmware id    : $firmware"
-        echo " recovery reason: $recovery"
-        echo " tpm initialized: $tpm"
-        echo " wp switch      : $wp"
-        echo " rw legacy      : $legacy"
-
-        echo
-
-        if [ "$verbose_mode" -eq 1 ]; then
-
-            verbose_print "full crossystem dump"
-
-            crossystem | while read -r line; do
-                verbose_print "$line"
-            done
-        fi
+        echo " developer mode : $(crossystem devsw_boot)"
+        echo " active slot    : $(crossystem mainfw_act)"
+        echo " firmware id    : $(crossystem fwid)"
+        echo " recovery reason: $(crossystem recovery_reason)"
+        echo " tpm initialized: $(crossystem tpm_init_done)"
+        echo " wp switch      : $(crossystem wpsw_cur)"
+        echo " rw legacy      : $(crossystem dev_boot_legacy)"
 
     else
-
         err "crossystem unavailable"
-
     fi
 }
 
@@ -721,24 +753,9 @@ chromeos_firmware() {
 
     header
 
-    vendor=$(cat /sys/class/dmi/id/bios_vendor 2>/dev/null)
-    version_info=$(cat /sys/class/dmi/id/bios_version 2>/dev/null)
-    bios_date=$(cat /sys/class/dmi/id/bios_date 2>/dev/null)
-
-    printf " bios vendor : %s\n" "$vendor"
-    printf " bios version: %s\n" "$version_info"
-    printf " bios date   : %s\n" "$bios_date"
-
-    echo
-
-    if [ "$verbose_mode" -eq 1 ]; then
-
-        verbose_print "firmware metadata"
-
-        dmidecode -t bios 2>/dev/null | while read -r line; do
-            verbose_print "$line"
-        done
-    fi
+    printf " bios vendor : %s\n" "$(cat /sys/class/dmi/id/bios_vendor 2>/dev/null)"
+    printf " bios version: %s\n" "$(cat /sys/class/dmi/id/bios_version 2>/dev/null)"
+    printf " bios date   : %s\n" "$(cat /sys/class/dmi/id/bios_date 2>/dev/null)"
 }
 
 find_vm_image() {
@@ -755,26 +772,31 @@ find_vm_image() {
         alpine)
             remote_url="https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/alpine-virt-3.22.0-x86_64.iso"
             local_file="$image_dir/alpine.iso"
+            required_mb=300
             ;;
 
         debian)
             remote_url="https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-13.0.0-amd64-netinst.iso"
             local_file="$image_dir/debian.iso"
+            required_mb=1000
             ;;
 
         tinycore)
             remote_url="http://tinycorelinux.net/15.x/x86_64/release/TinyCorePure64.iso"
             local_file="$image_dir/tinycore.iso"
+            required_mb=300
             ;;
 
         arch)
             remote_url="https://geo.mirror.pkgbuild.com/iso/latest/archlinux-x86_64.iso"
             local_file="$image_dir/arch.iso"
+            required_mb=2500
             ;;
 
         fedora)
             remote_url="https://download.fedoraproject.org/pub/fedora/linux/releases/42/Workstation/x86_64/iso/Fedora-Workstation-Live-x86_64-42-1.1.iso"
             local_file="$image_dir/fedora.iso"
+            required_mb=3500
             ;;
 
         *)
@@ -788,26 +810,37 @@ find_vm_image() {
 
         ok "cached image detected"
 
+        verbose_print "using cached image: $local_file"
+
         echo "$local_file"
         return
     fi
+
+    fetch_cleanup "$required_mb"
 
     warn "image missing locally"
 
     loading "downloading image"
 
-    if [ "$verbose_mode" -eq 1 ]; then
-        verbose_print "download url: $remote_url"
-        verbose_print "cache path  : $local_file"
-    fi
+    verbose_print "download url : $remote_url"
+    verbose_print "cache path   : $local_file"
+
+    start_time=$(date +%s)
 
     if command -v curl >/dev/null 2>&1; then
 
-        curl -L "$remote_url" -o "$local_file"
+        curl \
+            -L \
+            --progress-bar \
+            "$remote_url" \
+            -o "$local_file"
 
     elif command -v wget >/dev/null 2>&1; then
 
-        wget "$remote_url" -O "$local_file"
+        wget \
+            --show-progress \
+            "$remote_url" \
+            -O "$local_file"
 
     else
 
@@ -815,7 +848,21 @@ find_vm_image() {
         exit 1
     fi
 
+    if [ ! -f "$local_file" ]; then
+        err "download failed"
+        exit 1
+    fi
+
+    end_time=$(date +%s)
+
+    elapsed=$((end_time - start_time))
+
+    downloaded_size=$(du -h "$local_file" | awk '{print $1}')
+
     ok "image installed"
+
+    verbose_print "downloaded image size : $downloaded_size"
+    verbose_print "download time         : ${elapsed}s"
 
     echo "$local_file"
 }
@@ -898,385 +945,3 @@ vm_start() {
 
     esac
 }
-
-vm_list() {
-
-    header
-
-    printf "${white}installed vm images${reset}\n\n"
-
-    ls -lh "$image_dir" | page_output
-
-    echo
-}
-
-logs_cmd() {
-    tail -n 100 "$log_file" | page_output
-}
-
-logs_follow() {
-    tail -f "$log_file"
-}
-
-logs_errors() {
-    grep "\[fail\]" "$log_file" | page_output
-}
-
-logs_sessions() {
-    ls -1 "$log_dir"/session_*.log 2>/dev/null | page_output
-}
-
-history_cmd() {
-    tail -n 50 "$history_file" | page_output
-}
-
-unsafe_enable() {
-
-    require_root
-
-    echo "unsafe=enabled" > "$config_dir/unsafe.conf"
-
-    ok "unsafe mode enabled"
-}
-
-unsafe_disable() {
-
-    require_root
-
-    rm -f "$config_dir/unsafe.conf"
-
-    ok "unsafe mode disabled"
-}
-
-unsafe_status() {
-
-    if [ -f "$config_dir/unsafe.conf" ]; then
-        printf "${red}unsafe mode enabled${reset}\n"
-    else
-        printf "${green}unsafe mode disabled${reset}\n"
-    fi
-}
-
-firmware_backup() {
-
-    require_root
-
-    backup_file="$backup_dir/firmware_$(date +%Y%m%d_%H%M%S).bin"
-
-    flashrom -p internal -r "$backup_file"
-
-    ok "firmware backup completed"
-
-    echo "$backup_file"
-}
-
-help_cmd() {
-
-    header
-
-cat << EOF
-
-flags
-
---verbose  enable verbose logging
---scroll   enable scrollable output
-
-status
-monitor
-
-hardware scan
-
-network scan
-network ping <host>
-network trace <host>
-network ports
-network wifi scan
-network speedtest
-network sniff
-
-thermal
-battery health
-
-recovery shell
-recovery repair
-recovery network
-recovery rollback
-
-chromeos status
-chromeos verify
-chromeos firmware
-chromeos partitions
-
-benchmark
-
-vm start alpine
-vm start debian
-vm start tinycore
-vm start arch
-vm start fedora
-
-vm list
-
-logs
-logs follow
-logs errors
-logs sessions
-
-history
-
-unsafe enable
-unsafe disable
-unsafe status
-
-firmware backup
-
-help
-
-EOF
-}
-
-case "$1" in
-
-    --verbose|-v|--scroll|-s)
-        shift
-        ;;
-esac
-
-case "$1" in
-
-    status)
-        status_cmd
-        ;;
-
-    monitor)
-        monitor_cmd
-        ;;
-
-    hardware)
-
-        case "$2" in
-
-            scan)
-                hardware_scan
-                ;;
-
-            *)
-                err "invalid hardware command"
-                ;;
-
-        esac
-        ;;
-
-    network)
-
-        case "$2" in
-
-            scan)
-                network_scan
-                ;;
-
-            ping)
-                network_ping "$@"
-                ;;
-
-            trace)
-                network_trace "$@"
-                ;;
-
-            ports)
-                network_ports
-                ;;
-
-            speedtest)
-                network_speedtest
-                ;;
-
-            sniff)
-                network_sniff
-                ;;
-
-            wifi)
-
-                if [ "$3" = "scan" ]; then
-                    network_wifi_scan
-                fi
-                ;;
-
-            *)
-                err "invalid network command"
-                ;;
-
-        esac
-        ;;
-
-    thermal)
-        thermal_cmd
-        ;;
-
-    battery)
-
-        case "$2" in
-
-            health)
-                battery_health
-                ;;
-
-            *)
-                err "invalid battery command"
-                ;;
-
-        esac
-        ;;
-
-    recovery)
-
-        case "$2" in
-
-            shell)
-                recovery_shell
-                ;;
-
-            repair)
-                recovery_repair
-                ;;
-
-            network)
-                recovery_network
-                ;;
-
-            rollback)
-                recovery_rollback
-                ;;
-
-            *)
-                err "invalid recovery command"
-                ;;
-
-        esac
-        ;;
-
-    chromeos)
-
-        case "$2" in
-
-            status)
-                chromeos_status
-                ;;
-
-            verify)
-                chromeos_verify
-                ;;
-
-            firmware)
-                chromeos_firmware
-                ;;
-
-            partitions)
-                chromeos_partitions
-                ;;
-
-            *)
-                err "invalid chromeos command"
-                ;;
-
-        esac
-        ;;
-
-    benchmark)
-        benchmark_cmd
-        ;;
-
-    vm)
-
-        case "$2" in
-
-            start)
-                vm_start "$@"
-                ;;
-
-            list)
-                vm_list
-                ;;
-
-            *)
-                err "invalid vm command"
-                ;;
-
-        esac
-        ;;
-
-    logs)
-
-        case "$2" in
-
-            follow)
-                logs_follow
-                ;;
-
-            errors)
-                logs_errors
-                ;;
-
-            sessions)
-                logs_sessions
-                ;;
-
-            *)
-                logs_cmd
-                ;;
-
-        esac
-        ;;
-
-    history)
-        history_cmd
-        ;;
-
-    unsafe)
-
-        case "$2" in
-
-            enable)
-                unsafe_enable
-                ;;
-
-            disable)
-                unsafe_disable
-                ;;
-
-            status)
-                unsafe_status
-                ;;
-
-            *)
-                err "invalid unsafe command"
-                ;;
-
-        esac
-        ;;
-
-    firmware)
-
-        case "$2" in
-
-            backup)
-                firmware_backup
-                ;;
-
-            *)
-                err "invalid firmware command"
-                ;;
-
-        esac
-        ;;
-
-    help|"")
-        help_cmd
-        ;;
-
-    *)
-        err "unknown command"
-        help_cmd
-        ;;
-
-esac
