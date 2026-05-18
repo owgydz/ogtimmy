@@ -1,6 +1,6 @@
 #!/bin/bash
 
-version="2.9.6-rc3"
+version="1.0.0-rc3"
 
 config_dir="/etc/timmy"
 log_dir="/var/log/timmy"
